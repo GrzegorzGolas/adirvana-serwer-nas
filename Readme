@@ -1,0 +1,390 @@
+Audio Server – Audirvana + Diretta RT Linux
+
+High-performance Linux audio server optimized for low-latency network audio streaming using Audirvana Core and Diretta.
+
+System designed as dedicated audio transport server with deterministic scheduling, RT kernel and optimized network stack.
+
+1. System Overview
+
+Host: audio-server
+Kernel: 6.12.73+deb13-rt-amd64
+OS: Debian RT
+Role: Audio streaming server
+
+Server responsibilities:
+
+Audirvana Studio Core server
+
+music file server (SMB/NFS)
+
+Diretta streaming host
+
+network audio transport
+
+2. Audio Architecture
+Audirvana Core
+      │
+      │ TCP audio stream
+      │
+Diretta Host
+      │
+      │ LAN
+      │
+Diretta Target
+      │
+USB / I2S
+      │
+AudioGD R1 R2R DAC
+
+Additional network devices:
+
+Device	Role
+NVIDIA Shield	Kodi playback
+Android / iOS	Audirvana Remote
+Storage	/mnt/music
+3. Full System Diagram
+                         INTERNET
+                             │
+                             │
+                        ROUTER / SWITCH
+                             │
+            ┌────────────────┴─────────────────┐
+            │                                  │
+            │                                  │
+     10.0.0.200                          10.0.0.24
+      audio-server                      Diretta Target
+      (Debian RT)                         (renderer)
+            │                                  │
+            │                                  │
+     Audirvana Studio                    Diretta Engine
+        Core Server                            │
+            │                                  │
+            │                                  │
+        UPnP stream                        USB / I2S
+            │                                  │
+            │                                  │
+         LAN TCP                           AudioGD R1
+            │                                  │
+            └──────────────►  DAC  ◄───────────┘
+                                  │
+                                  │
+                               Amplifier
+                                  │
+                               Speakers
+4. Kernel
+
+Kernel version:
+
+6.12.73+deb13-rt-amd64
+
+Type:
+
+PREEMPT_RT
+
+Purpose:
+
+deterministic scheduling
+
+reduced interrupt latency
+
+stable network audio timing
+
+optimized IRQ handling
+
+5. Kernel Boot Parameters
+
+GRUB kernel parameters:
+
+intel_pstate=disable
+isolcpus=2,3
+nohz_full=2,3
+rcu_nocbs=2,3
+intel_idle.max_cstate=1
+processor.max_cstate=1
+nosoftlockup
+mitigations=off
+nosmt
+noibrs
+noibpb
+spectre_v2=off
+l1tf=off
+mds=off
+tsx=on
+no_stf_barrier
+nopti
+ipv6.disable=1
+CPU Isolation
+isolcpus
+nohz_full
+rcu_nocbs
+
+Separates audio threads from system workload.
+
+CPU0-1 → system
+CPU2-3 → audio
+6. Power Management
+
+Disabled deep sleep states:
+
+intel_idle.max_cstate=1
+processor.max_cstate=1
+
+Goal:
+
+lower wake latency
+
+stable CPU timing
+
+7. Audirvana Core
+
+Audirvana runs as a systemd service.
+
+Service file:
+
+/etc/systemd/system/audirvanaStudio.service
+
+Configuration:
+
+[Unit]
+Description=Run audirvanaStudio
+After=network.target avahi-daemon.service
+
+[Service]
+User=audirvana
+ExecStart=/opt/audirvana/studio/audirvanaStudio --server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+Activation:
+
+sudo systemctl daemon-reload
+sudo systemctl enable audirvanaStudio
+sudo systemctl start audirvanaStudio
+
+Status:
+
+systemctl status audirvanaStudio
+8. Audirvana Networking
+
+Audirvana services:
+
+Service	Port
+RemoteServer	dynamic
+UPnP	49152
+
+Example:
+
+RemoteServer: 38769
+UPnP: 49152
+
+Discovery uses:
+
+Avahi / mDNS
+
+Remote control via:
+
+Audirvana Remote App
+9. Sysctl Tuning
+
+Network and kernel tuning optimized for low-latency audio streaming.
+
+Network Scheduler
+net.core.default_qdisc = fq
+
+TCP pacing enabled.
+
+Network Queue
+net.core.netdev_max_backlog = 250
+net.core.netdev_budget = 150
+
+Controls network burst behavior.
+
+Busy Polling
+net.core.busy_poll = 50
+net.core.busy_read = 50
+
+Reduces network latency.
+
+TCP Audio Tuning
+net.ipv4.tcp_low_latency = 1
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_autocorking = 0
+net.ipv4.tcp_notsent_lowat = 16384
+net.ipv4.tcp_no_metrics_save = 1
+net.ipv4.tcp_tso_win_divisor = 8
+
+Goals:
+
+stable packet timing
+
+minimal TCP bursts
+
+consistent streaming latency
+
+Memory Tuning
+vm.swappiness = 1
+vm.dirty_ratio = 5
+vm.dirty_background_ratio = 2
+vm.dirty_expire_centisecs = 3000
+vm.dirty_writeback_centisecs = 500
+
+Purpose:
+
+minimal swap usage
+
+controlled disk writeback
+
+RT Scheduler
+kernel.sched_rt_runtime_us = -1
+
+Realtime threads are not limited.
+
+Timer Migration
+kernel.timer_migration = 0
+
+Reduces CPU jitter.
+
+Watchdog
+kernel.watchdog = 0
+kernel.nmi_watchdog = 0
+
+Reduces unnecessary interrupts.
+
+10. Intel NIC Tuning
+
+Interface:
+
+eno1
+Offloads disabled
+TSO
+GSO
+GRO
+LRO
+
+Reason:
+
+Stable packet timing.
+
+Energy Efficient Ethernet
+
+EEE disabled.
+
+Reason:
+
+EEE may introduce:
+
+link micro-pauses
+
+packet jitter
+
+Ring Buffers
+RX = 256
+TX = 256
+
+Prevents burst buffering.
+
+Interrupt Coalescing
+rx-usecs = 0
+
+Minimizes IRQ latency.
+
+11. Storage
+
+Music location:
+
+/mnt/music/Music
+
+Access protocols:
+
+SMB
+
+NFS
+
+Audirvana library monitoring uses:
+
+inotify
+
+Limit:
+
+fs.inotify.max_user_watches = 524288
+12. Diretta
+
+Renderer type:
+
+Diretta Renderer
+
+Endpoint:
+
+http://10.0.0.24:1332
+
+Audirvana streaming method:
+
+UPnP → Diretta
+13. Network Layout
+Device	IP
+audio-server	10.0.0.200
+Diretta renderer	10.0.0.24
+Kodi (Shield)	10.0.0.150
+14. System State
+
+System optimized for:
+
+RT Linux kernel
+
+Audirvana Core
+
+Diretta streaming
+
+low-latency networking
+
+stable TCP audio
+
+15. Stability
+
+Current system behavior:
+
+✔ Audirvana starts automatically
+✔ Diretta renderer auto-detected
+✔ stable network connection
+✔ NIC offloads disabled
+✔ RT kernel active
+
+System functions as:
+
+dedicated Linux audio server
+
+16. Key Optimizations
+
+Three elements provide the biggest improvement:
+
+1. RT Kernel
+PREEMPT_RT
+2. Network Stack
+GRO/GSO/TSO disabled
+EEE disabled
+fq scheduler
+3. CPU Isolation
+isolcpus
+nohz_full
+rcu_nocbs
+17. Rebuilding the System
+
+Installation order:
+
+1 install Debian
+2 install RT kernel
+3 configure kernel boot parameters
+4 configure sysctl tuning
+5 configure NIC tuning
+6 install Audirvana
+7 configure systemd service
+8 configure storage (/mnt/music)
+9 configure Diretta renderer
+License
+
+Documentation only.
+Configuration intended for personal high-performance audio systems.
